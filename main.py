@@ -3,12 +3,15 @@ import pickle
 import time
 from collections import Counter
 
+from flask import Flask, app, jsonify, request
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from knn import rodar_knn, avaliar_knn
 from matriz_fatorizada import rodar_svd, avaliar_svd
 from rede_neural import rodar_rede_neural, avaliar_rede_neural
+
+app = Flask(__name__)
 
 ARQUIVO_FILMES = "movies_small.csv"  # catálogo de filmes usado na execução
 ARQUIVO_AVALIACOES = "ratings_small.csv"  # avaliações usadas na execução
@@ -213,22 +216,24 @@ def formatar_tabela(df):
     ]
     return "\n".join(linha.rstrip() for linha in linhas)
 
-
-if __name__ == "__main__":
-
+@app.route("/recomendacoes", methods=["POST"])
+def gera_recomendacoes():
+    
     print("\nInício do carregamento dos dados")
     start = time.time()  # início da medição de tempo de cada etapa
 
     movies, ratings_base = carregamento_dados()  # catálogo e avaliações originais, sem o usuário fictício
 
-    # Horror
+
+    dados = request.get_json()
+
+    # Extrai as avaliações do JSON recebido
+    avaliacoes_raw = dados.get("avaliacoes", [])
+    
+    # Reconstrói a lista de tuplas [(movieId, nota), ...]
     avaliacoes_usuario = [
-        # Pares (movieId, nota) de um usuário que gosta de terror
-        (2459, 5.0),
-        (148671, 5.0),
-        (168250, 4.5),
-        (168252, 5.0),
-        (162082, 4.0),
+        (int(item["movieId"]), float(item["rating"])) 
+        for item in avaliacoes_raw
     ]
 
     # Avaliações inválidas encerram a execução com uma mensagem clara em vez de um traceback
@@ -311,3 +316,17 @@ if __name__ == "__main__":
 
     if CALCULAR_METRICAS:
         print(f"\nRMSE e MAE medidos em {len(teste_df)} avaliações de teste")
+
+    resposta = {
+        "knn": recomendacoes_knn["movieId"].tolist(),
+        "svd": recomendacoes_svd["movieId"].tolist(),
+        "rede_neural": recomendacoes_rede["movieId"].tolist(),
+    }
+
+    return jsonify(resposta)
+
+
+if __name__ == "__main__":
+
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
