@@ -2,6 +2,7 @@ import os
 import pickle
 import time
 from collections import Counter
+import csv
 
 from flask import Flask, app, jsonify, request
 from flask_cors import CORS
@@ -327,6 +328,45 @@ def gera_recomendacoes():
 
     return jsonify(resposta)
 
+
+@app.route("/avaliacoes", methods=["POST"])
+def recebe_avaliacoes():
+    # Recebe o JSON enviado pelo front-end
+    dados = request.get_json(silent=True) or {}
+    avaliacoes = dados.get("avaliacoes", {})
+
+    # Valida se os dados contêm as notas esperadas
+    if not avaliacoes:
+        return jsonify({"erro": "Nenhuma avaliação enviada."}), 400
+
+    # Extrai os valores das notas (com fallback para vazio caso falte alguma)
+    nota_ncf = avaliacoes.get("ncf", 0)
+    nota_knn = avaliacoes.get("knn", 0)
+    nota_svd = avaliacoes.get("svd", 0)
+
+    # Nome do arquivo CSV onde os dados serão salvos
+    arquivo_csv = "avaliacoes_teste.csv"
+
+    # Verifica se o arquivo já existe para decidir se escreve o cabeçalho
+    arquivo_existe = os.path.exists(arquivo_csv)
+
+    try:
+        # Abre o arquivo CSV em modo de adição (append)
+        with open(arquivo_csv, mode="a", newline="", encoding="utf-8") as f:
+            escritor = csv.writer(f)
+            
+            # Se o arquivo não existir, cria o cabeçalho primeiro
+            if not arquivo_existe:
+                escritor.writerow(["knn", "svd", "ncf"])
+            
+            # Insere a nova linha com as notas recebidas
+            escritor.writerow([nota_knn, nota_svd, nota_ncf])
+
+        return jsonify({"mensagem": "Avaliações salvas com sucesso no CSV!"}), 200
+
+    except Exception as e:
+        print(f"Erro ao salvar no CSV: {e}")
+        return jsonify({"erro": "Falha interna ao salvar os dados."}), 500
 
 if __name__ == "__main__":
 
