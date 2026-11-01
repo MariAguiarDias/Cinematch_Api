@@ -2,8 +2,10 @@ import os
 import pickle
 import time
 from collections import Counter
+from memory_profiler import profile
 
 from flask import Flask, app, jsonify, request
+from flask_cors import CORS
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
@@ -12,6 +14,7 @@ from matriz_fatorizada import rodar_svd, avaliar_svd
 from rede_neural import rodar_rede_neural, avaliar_rede_neural
 
 app = Flask(__name__)
+CORS(app)
 
 ARQUIVO_FILMES = "movies_small.csv"  # catálogo de filmes usado na execução
 ARQUIVO_AVALIACOES = "ratings_small.csv"  # avaliações usadas na execução
@@ -217,6 +220,7 @@ def formatar_tabela(df):
     return "\n".join(linha.rstrip() for linha in linhas)
 
 @app.route("/recomendacoes", methods=["POST"])
+@profile
 def gera_recomendacoes():
     
     print("\nInício do carregamento dos dados")
@@ -232,8 +236,8 @@ def gera_recomendacoes():
     
     # Reconstrói a lista de tuplas [(movieId, nota), ...]
     avaliacoes_usuario = [
-        (int(item["movieId"]), float(item["rating"])) 
-        for item in avaliacoes_raw
+        (int(movie_id), float(detalhes["nota"])) 
+        for movie_id, detalhes in avaliacoes_raw.items()
     ]
 
     # Avaliações inválidas encerram a execução com uma mensagem clara em vez de um traceback
@@ -320,7 +324,7 @@ def gera_recomendacoes():
     resposta = {
         "knn": recomendacoes_knn["movieId"].tolist(),
         "svd": recomendacoes_svd["movieId"].tolist(),
-        "rede_neural": recomendacoes_rede["movieId"].tolist(),
+        "ncf": recomendacoes_rede["movieId"].tolist(),
     }
 
     return jsonify(resposta)
