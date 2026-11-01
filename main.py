@@ -232,12 +232,12 @@ def gera_recomendacoes():
     dados = request.get_json()
 
     # Extrai as avaliações do JSON recebido
-    avaliacoes_raw = dados.get("avaliacoes", [])
+    avaliacoes_raw = dados.get("avaliacoes", {})
     
     # Reconstrói a lista de tuplas [(movieId, nota), ...]
     avaliacoes_usuario = [
-        (movie_id, float(detalhes["nota"])) 
-        for movie_id, detalhes in avaliacoes_raw.tolist()
+        (int(movie_id), float(detalhes["nota"])) 
+        for movie_id, detalhes in avaliacoes_raw.items()
     ]
 
     # Avaliações inválidas encerram a execução com uma mensagem clara em vez de um traceback
