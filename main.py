@@ -236,8 +236,8 @@ def gera_recomendacoes():
     
     # Reconstrói a lista de tuplas [(movieId, nota), ...]
     avaliacoes_usuario = [
-        (int(movie_id), float(detalhes["nota"])) 
-        for movie_id, detalhes in avaliacoes_raw
+        (movie_id, float(detalhes["nota"])) 
+        for movie_id, detalhes in avaliacoes_raw.tolist()
     ]
 
     # Avaliações inválidas encerram a execução com uma mensagem clara em vez de um traceback
