@@ -2,7 +2,6 @@ import os
 import pickle
 import time
 from collections import Counter
-from memory_profiler import profile
 
 from flask import Flask, app, jsonify, request
 from flask_cors import CORS
@@ -220,7 +219,6 @@ def formatar_tabela(df):
     return "\n".join(linha.rstrip() for linha in linhas)
 
 @app.route("/recomendacoes", methods=["POST"])
-@profile
 def gera_recomendacoes():
     
     print("\nInício do carregamento dos dados")
