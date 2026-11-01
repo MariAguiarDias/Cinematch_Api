@@ -7,3 +7,4 @@ torch
 Flask
 gunicorn
 flask_cors
+memory_profiler
