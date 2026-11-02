@@ -9,9 +9,9 @@ from flask_cors import CORS
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from knn import rodar_knn, avaliar_knn
-from matriz_fatorizada import rodar_svd, avaliar_svd
-from rede_neural import rodar_rede_neural, avaliar_rede_neural
+from knn import rodar_knn, avaliar_knn, preparar_knn
+from matriz_fatorizada import rodar_svd, avaliar_svd, preparar_svd
+from rede_neural import rodar_rede_neural, avaliar_rede_neural, preparar_rede_neural
 
 app = Flask(__name__)
 CORS(app)
@@ -29,6 +29,7 @@ SEMENTE = 42  # semente que torna a divisão treino/teste reproduzível
 SEPARADOR = "\n"+ ("-" * 100) + "\n"  # linha que separa as etapas na saída do terminal
 CALCULAR_METRICAS = False  # True mede RMSE e MAE dos algoritmos, o que deixa a execução alguns segundos mais lenta
 
+_base = {}  # catálogo e avaliações originais, guardados em memória enquanto o servidor estiver rodando
 
 # Identifica a versão atual dos CSVs pelo tamanho e pela data de modificação
 def assinatura_arquivos():
@@ -37,43 +38,32 @@ def assinatura_arquivos():
         for nome in (ARQUIVO_FILMES, ARQUIVO_AVALIACOES)
     }
 
+# Mantém a base e os três modelos em memória, refazendo tudo só quando os CSVs mudarem
+def obter_base():
 
-# Carrega filmes e avaliações, reaproveitando o cache enquanto os CSVs não mudarem
-def carregamento_dados():
-    """
-    Carrega os dados dos filmes e das avaliações.
-    return: Lista de DataFrames (movies, ratings)
-    """
+    print("Carregando a base...")
 
     assinatura = assinatura_arquivos()  # versão atual dos CSVs
 
-    if os.path.exists(CACHE_DADOS):
-        # Um cache gerado em outro computador ou com outra versão do pandas pode não abrir, e nesse caso é refeito
-        try:
-            with open(CACHE_DADOS, "rb") as f:
-                dados = pickle.load(f)  # conteúdo salvo no cache
-        except Exception:
-            dados = {}  # cache ilegível, tratado como desatualizado
+    # Se a versão atual for diferente da última carregada, refaz tudo
+    if _base.get("assinatura") != assinatura:
 
-        # O cache só é reaproveitado se tiver sido gerado a partir dos mesmos CSVs
-        if dados.get("assinatura") == assinatura:
-            print("\nCarregando ratings e movies do cache local...")
-            return dados["movies"], dados["ratings"]
+        start = time.time()
 
-        print("\nCache desatualizado ou ilegível, recarregando os CSVs...")
-    else:
-        print()  # separa a leitura dos CSVs da linha de início
+        print("Carregando os dados originais dos CSVs...")
+        movies_base = pd.read_csv(ARQUIVO_FILMES)  # Catálogo com movieId, title e genres
+        ratings_base = pd.read_csv(ARQUIVO_AVALIACOES)  # Avaliações com userId, movieId, rating e timestamp
 
-    print("Lendo arquivos CSV originais...")
-    movies = pd.read_csv(ARQUIVO_FILMES)  # catálogo com movieId, title e genres
-    ratings = pd.read_csv(ARQUIVO_AVALIACOES)  # avaliações com userId, movieId, rating e timestamp
+        print("Treinando os modelos com a base original...")
 
-    with open(CACHE_DADOS, "wb") as f:
-        pickle.dump({"movies": movies, "ratings": ratings, "assinatura": assinatura}, f)
-    print("Dados salvos em cache com sucesso!")
+        preparar_knn(ratings_base)
+        preparar_svd(ratings_base)
+        preparar_rede_neural(ratings_base)
 
-    return movies, ratings
+        print(f"Carregamento inicial pronto ({time.time() - start:.4f} segundos)")
+        _base.update(assinatura=assinatura, movies=movies_base, ratings=ratings_base)
 
+    return _base["movies"], _base["ratings"]
 
 # Recusa avaliações que os algoritmos não conseguiriam usar, explicando o motivo
 def validar_avaliacoes(novas_avaliacoes, movies):
@@ -106,22 +96,14 @@ def validar_avaliacoes(novas_avaliacoes, movies):
             f"Notas fora da escala de {NOTA_MIN} a {NOTA_MAX} em passos de 0.5: {fora_da_escala}"
         )
 
-
 # Valida as avaliações e as acrescenta à base como um novo usuário
 def inserir_novo_usuario(ratings, movies, novas_avaliacoes):
-    """
-    Insere um novo usuário no dataset de ratings, com suas avaliações.
-    TODO: inserir no arquivo ratings.csv também.
-    ratings: DataFrame de ratings atual
-    novas_avaliacoes: lista de tuplas (movieId, rating)
-    return: tupla (ratings com o novo usuário, userId do novo usuário)
-    """
 
     # Validar antes de inserir impede que IDs inexistentes sejam descartados em silêncio no merge
     validar_avaliacoes(novas_avaliacoes, movies)
 
-    novo_usuario_id = int(ratings["userId"].max()) + 1  # próximo ID livre da base
-    timestamp = int(pd.Timestamp.now().timestamp())  # momento da inserção, no mesmo formato do MovieLens
+    novo_usuario_id = int(ratings["userId"].max()) + 1  # Próximo ID livre da base
+    timestamp = int(pd.Timestamp.now().timestamp())  # Momento da inserção, no mesmo formato do MovieLens
 
     # Avaliações do novo usuário no formato do ratings
     novos_registros = pd.DataFrame({
@@ -132,7 +114,6 @@ def inserir_novo_usuario(ratings, movies, novas_avaliacoes):
     })
 
     return pd.concat([ratings, novos_registros], ignore_index=True), novo_usuario_id
-
 
 # Pré-calcula o histórico e o perfil de gêneros do usuário, compartilhados por todos os algoritmos
 def montar_calculos(movies, ratings, user_id):
@@ -185,13 +166,11 @@ def montar_calculos(movies, ratings, user_id):
         "historico_usuario": historico_usuario,
     }
 
-
 # Separa a base uma única vez para que todos os algoritmos sejam avaliados nas mesmas avaliações
 def dividir_treino_teste(ratings):
 
     # Constrói o trainset e o testset (20% dos dados para teste)
     return train_test_split(ratings, test_size=PROPORCAO_TESTE, random_state=SEMENTE)
-
 
 # Converte um valor em texto para exibição, sem alterar o dado original
 def formatar_valor(valor, casas):
@@ -201,12 +180,10 @@ def formatar_valor(valor, casas):
         return ", ".join(sorted(str(item) for item in valor))
     return str(valor)
 
-
 # Converte uma coluna em texto, com todos os números no mesmo número de casas decimais (de 1 a 4)
 def formatar_coluna(coluna):
     casas = max([1] + [len(f"{v:.4f}".rstrip("0").split(".")[1]) for v in coluna if isinstance(v, float)])  # menor quantidade de casas que mostra todos os valores
     return coluna.map(lambda valor: formatar_valor(valor, casas))
-
 
 # Monta uma tabela em texto com todas as colunas alinhadas à esquerda, usada só na exibição do terminal
 def formatar_tabela(df):
@@ -219,18 +196,17 @@ def formatar_tabela(df):
     ]
     return "\n".join(linha.rstrip() for linha in linhas)
 
+
 @app.route("/recomendacoes", methods=["POST"])
 def gera_recomendacoes():
     
-    print("\nInício do carregamento dos dados")
-    start = time.time()  # início da medição de tempo de cada etapa
+    movies, ratings_base = obter_base()  # catálogo e avaliações originais, sem o usuário fictício, já em memória
 
-    movies, ratings_base = carregamento_dados()  # catálogo e avaliações originais, sem o usuário fictício
-
-
-    dados = request.get_json()
+    print("Recebendo avaliações do usuário...")
+    start = time.time()
 
     # Extrai as avaliações do JSON recebido
+    dados = request.get_json()
     avaliacoes_raw = dados.get("avaliacoes", {})
     
     # Reconstrói a lista de tuplas [(movieId, nota), ...]
@@ -255,12 +231,11 @@ def gera_recomendacoes():
     print(f"Perfil de gêneros do usuário {USER_ID} (core, >= {CORE_GENERO_MIN_FRACAO:.0%} dos filmes): {sorted(calculos['perfil_core_usuario'])}")
     print(f"Modo do filtro de gênero: {MODO_FILTRO_GENERO}")
 
-    end = time.time()  # fim da medição de tempo da etapa atual
-    print(f"Fim do carregamento dos dados ({end - start:.4f} segundos)")
+    print(f"Usuario montado com sucesso ({time.time() - start:.4f} segundos)")
+    print(SEPARADOR)
 
     tempos_recomendacao = {}  # segundos que cada algoritmo levou para gerar o top 5
 
-    print(SEPARADOR)
     print("Começo KNN...")
     start = time.time()
 
@@ -273,6 +248,7 @@ def gera_recomendacoes():
     tempos_recomendacao["KNN"] = end - start
     print(f"\nFim do KNN... ({end - start:.4f} segundos)")
     print(SEPARADOR)
+
     print("Começo Matriz Fatorizada...")
     start = time.time()
 
@@ -285,6 +261,7 @@ def gera_recomendacoes():
     tempos_recomendacao["SVD"] = end - start
     print(f"\nFim do Matriz Fatorizada... ({end - start:.4f} segundos)")
     print(SEPARADOR)
+
     print("Começo Rede Neural...")
     start = time.time()
 
@@ -298,11 +275,11 @@ def gera_recomendacoes():
     print(f"\nFim da Rede Neural... ({end - start:.4f} segundos)")
     print(SEPARADOR)
 
-    resumo = pd.DataFrame({"tempo_recomendacao_s": tempos_recomendacao})  # uma linha por algoritmo, com o tempo do top 5
-
     # A avaliação treina cada algoritmo de novo, então só roda quando as métricas forem necessárias
     if CALCULAR_METRICAS:
 
+        resumo = pd.DataFrame({"tempo_recomendacao_s": tempos_recomendacao})  # uma linha por algoritmo, com o tempo do top 5
+        
         # A avaliação usa a base original, sem o usuário fictício, para que as métricas não mudem a cada perfil testado
         treino_df, teste_df = dividir_treino_teste(ratings_base)  # 80% para treino e 20% para teste
 
@@ -314,10 +291,8 @@ def gera_recomendacoes():
 
         resumo = resumo.join(pd.DataFrame(metricas).T)  # acrescenta RMSE, MAE e tempo de avaliação ao resumo
 
-    print("===== Resumo da execução =====")
-    print(formatar_tabela(resumo.rename_axis("algoritmo").reset_index()))
-
-    if CALCULAR_METRICAS:
+        print("===== Resumo da execução =====")
+        print(formatar_tabela(resumo.rename_axis("algoritmo").reset_index()))
         print(f"\nRMSE e MAE medidos em {len(teste_df)} avaliações de teste")
 
     resposta = {
@@ -327,7 +302,6 @@ def gera_recomendacoes():
     }
 
     return jsonify(resposta)
-
 
 @app.route("/avaliacoes", methods=["POST"])
 def recebe_avaliacoes():
@@ -372,3 +346,6 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
+        
+    # Os modelos são treinados quando o servidor inicia
+    obter_base()

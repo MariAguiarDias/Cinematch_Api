@@ -1,3 +1,4 @@
+import numpy as np
 from surprise import Dataset, Reader, SVD
 from surprise import accuracy
 
@@ -7,6 +8,7 @@ N_RECOMENDACOES = 5  # quantidade de filmes na lista final
 ESCALA_NOTAS = (0.5, 5.0) # escala real das notas do MovieLens
 PARAMETROS_SVD = dict(n_factors=20, lr_all=0.01, reg_all=0.01, n_epochs=20, random_state=42)  # fatores latentes, aprendizado, regularização, épocas e semente
 
+_modelo_base = {}  # SVD já treinado com a base original, guardado em memória entre as chamadas
 
 # Treina o SVD com todas as avaliações recebidas, sem separar teste
 def treinar_svd(ratings):
@@ -21,6 +23,53 @@ def treinar_svd(ratings):
 
     return model
 
+# Treina o SVD com a base original uma única vez, reaproveitando o modelo nas chamadas seguintes
+def preparar_svd(ratings_base):
+
+    model = treinar_svd(ratings_base)  # modelo treinado só com a base original
+    trainset = model.trainset  # dados e índices internos usados no treino
+
+    _modelo_base.update(
+        model=model,
+        pos_filme={trainset.to_raw_iid(i): i for i in trainset.all_items()},  # ID real do filme para a posição interna do Surprise
+    )
+
+# Calcula o viés e os fatores do usuário novo a partir das notas dele, sem alterar o modelo já treinado
+def ajustar_usuario_novo(notas_usuario):
+
+    model = _modelo_base["model"]  # modelo treinado só com a base original
+    pos_filme = _modelo_base["pos_filme"]  # posição interna de cada filme do treino
+    media_global = model.trainset.global_mean  # média de todas as notas da base
+    lr, reg = PARAMETROS_SVD["lr_all"], PARAMETROS_SVD["reg_all"]  # mesmos passo e regularização do treino
+    gerador = np.random.default_rng(PARAMETROS_SVD["random_state"])  # sorteio reproduzível dos fatores iniciais
+
+    vies_usuario = 0.0  # quanto o usuário costuma dar acima ou abaixo da média
+    fatores_usuario = gerador.normal(0, 0.1, PARAMETROS_SVD["n_factors"])  # gosto do usuário nas dimensões latentes, com a mesma inicialização do Surprise
+
+    # Filmes que ninguém da base avaliou não têm fatores aprendidos e ficam de fora do ajuste
+    pares = [
+        (pos_filme[mid], nota)
+        for mid, nota in zip(notas_usuario["movieId"], notas_usuario["rating"])
+        if mid in pos_filme
+    ]  # posição interna e nota de cada filme avaliado
+
+    # Repete o mesmo gradiente do Surprise, mas atualizando só o viés e os fatores do usuário
+    for _ in range(PARAMETROS_SVD["n_epochs"]):
+        for i, nota in pares:
+            erro = nota - (media_global + vies_usuario + model.bi[i] + model.qi[i] @ fatores_usuario)  # diferença entre a nota real e a prevista
+            vies_usuario += lr * (erro - reg * vies_usuario)
+            fatores_usuario += lr * (erro * model.qi[i] - reg * fatores_usuario)
+
+    return vies_usuario, fatores_usuario
+
+# Indica se usuário e filme existem no treino, ou seja, se têm fatores latentes aprendidos
+def _esta_no_treino(trainset, uid, iid):
+    try:
+        trainset.to_inner_uid(uid)
+        trainset.to_inner_iid(iid)
+        return True
+    except ValueError:
+        return False
 
 # Mede RMSE e MAE do SVD no conjunto de teste recebido do main
 def avaliar_svd(treino, teste):
@@ -41,17 +90,6 @@ def avaliar_svd(treino, teste):
         "fracao_prevista_pelo_modelo": conhecidos / len(testset),
     }
 
-
-# Indica se usuário e filme existem no treino, ou seja, se têm fatores latentes aprendidos
-def _esta_no_treino(trainset, uid, iid):
-    try:
-        trainset.to_inner_uid(uid)
-        trainset.to_inner_iid(iid)
-        return True
-    except ValueError:
-        return False
-
-
 # Roda a Fatoração de Matrizes (SVD) para recomendar filmes para o usuário USER_ID
 def rodar_svd(movies, ratings, USER_ID, calculos):
 
@@ -59,15 +97,23 @@ def rodar_svd(movies, ratings, USER_ID, calculos):
     genero_por_filme = calculos['genero_por_filme']  # conjunto de gêneros de cada filme
     perfil_generos_usuario = calculos['perfil_generos_usuario']  # todos os gêneros do histórico do usuário
 
-    # Todas as notas do usuário-alvo entram no treino para que nenhuma parte do perfil seja descartada
-    model = treinar_svd(ratings)  # modelo treinado com a base completa e o usuário-alvo
+    # Se o main ainda não preparou o modelo, ele é treinado agora com a base sem o usuário-alvo
+    if not _modelo_base:
+        preparar_svd(ratings[ratings["userId"] != USER_ID])
+
+    model = _modelo_base["model"]  # modelo treinado só com a base original
+    pos_filme = _modelo_base["pos_filme"]  # posição interna de cada filme do treino
+    vies_usuario, fatores_usuario = ajustar_usuario_novo(ratings[ratings["userId"] == USER_ID])  # perfil do usuário-alvo calculado sobre o modelo pronto
 
     # Filtra os filmes que o usuário já viu
     candidatos = movies.loc[~movies["movieId"].isin(watched_ids), "movieId"]  # IDs dos filmes ainda não vistos
 
-    # Gera as notas estimadas
+    base_usuario = model.trainset.global_mean + vies_usuario  # parte da previsão que não depende do filme
+    notas_treino = base_usuario + model.bi + model.qi @ fatores_usuario  # nota prevista para cada filme do treino, calculada de uma vez
+
+    # Filmes fora do treino recebem só a média e o viés do usuário, como o Surprise faz
     pontuacao_final = {  # nota estimada de cada filme candidato
-        movie_id: model.predict(USER_ID, movie_id).est
+        movie_id: float(np.clip(notas_treino[pos_filme[movie_id]] if movie_id in pos_filme else base_usuario, *ESCALA_NOTAS))
         for movie_id in candidatos
     }
 
