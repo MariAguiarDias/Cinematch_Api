@@ -318,6 +318,8 @@ def recebe_avaliacoes():
     nota_knn = avaliacoes.get("knn", 0)
     nota_svd = avaliacoes.get("svd", 0)
 
+    quantidade_avaliados = dados.get("quantidade_avaliados", 0)
+
     # Nome do arquivo CSV onde os dados serão salvos
     arquivo_csv = "avaliacoes_teste.csv"
 
@@ -331,10 +333,10 @@ def recebe_avaliacoes():
             
             # Se o arquivo não existir, cria o cabeçalho primeiro
             if not arquivo_existe:
-                escritor.writerow(["knn", "svd", "ncf"])
+                escritor.writerow(["knn", "svd", "ncf", "quantidade_avaliados"])
             
             # Insere a nova linha com as notas recebidas
-            escritor.writerow([nota_knn, nota_svd, nota_ncf])
+            escritor.writerow([nota_knn, nota_svd, nota_ncf, quantidade_avaliados])
 
         return jsonify({"mensagem": "Avaliações salvas com sucesso no CSV!"}), 200
 
