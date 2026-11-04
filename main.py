@@ -69,21 +69,18 @@ def obter_base():
 def validar_avaliacoes(novas_avaliacoes, movies):
 
     if len(novas_avaliacoes) < MIN_AVALIACOES:
-        raise ValueError(
-            f"É preciso avaliar pelo menos {MIN_AVALIACOES} filmes "
-            f"({len(novas_avaliacoes)} recebidas)."
-        )
+        return jsonify({"erro": f"É preciso avaliar pelo menos {MIN_AVALIACOES} filmes ({len(novas_avaliacoes)} recebidas)."}), 400
 
     ids = [mid for mid, _ in novas_avaliacoes]  # movieIds informados pelo usuário
 
     # Notas repetidas para o mesmo filme seriam somadas na matriz do KNN
     repetidos = sorted(mid for mid, qtd in Counter(ids).items() if qtd > 1)
     if repetidos:
-        raise ValueError(f"Filmes avaliados mais de uma vez: {repetidos}")
+        return jsonify({"erro": f"Filmes avaliados mais de uma vez: {repetidos}"}), 400
 
     inexistentes = sorted(set(ids) - set(movies["movieId"]))  # IDs que não estão no catálogo
     if inexistentes:
-        raise ValueError(f"movieIds que não existem em {ARQUIVO_FILMES}: {inexistentes}")
+        return jsonify({"erro": f"movieIds que não existem em {ARQUIVO_FILMES}: {inexistentes}"}), 400
 
     # Multiplicar por 2 transforma os passos de 0.5 em números inteiros
     fora_da_escala = [  
@@ -92,9 +89,7 @@ def validar_avaliacoes(novas_avaliacoes, movies):
         if not NOTA_MIN <= nota <= NOTA_MAX or (nota * 2) % 1 != 0
     ]
     if fora_da_escala:
-        raise ValueError(
-            f"Notas fora da escala de {NOTA_MIN} a {NOTA_MAX} em passos de 0.5: {fora_da_escala}"
-        )
+        return jsonify({"erro": f"Notas fora da escala de {NOTA_MIN} a {NOTA_MAX} em passos de 0.5: {fora_da_escala}"}), 400
 
 # Valida as avaliações e as acrescenta à base como um novo usuário
 def inserir_novo_usuario(ratings, movies, novas_avaliacoes):
@@ -185,18 +180,6 @@ def formatar_coluna(coluna):
     casas = max([1] + [len(f"{v:.4f}".rstrip("0").split(".")[1]) for v in coluna if isinstance(v, float)])  # menor quantidade de casas que mostra todos os valores
     return coluna.map(lambda valor: formatar_valor(valor, casas))
 
-# Monta uma tabela em texto com todas as colunas alinhadas à esquerda, usada só na exibição do terminal
-def formatar_tabela(df):
-    textos = df.apply(formatar_coluna)  # cópia da tabela com cada valor já em texto
-    larguras = {c: max([len(str(c))] + textos[c].str.len().tolist()) for c in textos.columns}  # largura de cada coluna
-    linhas = ["  ".join(str(c).ljust(larguras[c]) for c in textos.columns)]  # começa pelo cabeçalho
-    linhas += [
-        "  ".join(valor.ljust(larguras[c]) for c, valor in zip(textos.columns, linha))
-        for linha in textos.itertuples(index=False)
-    ]
-    return "\n".join(linha.rstrip() for linha in linhas)
-
-
 @app.route("/recomendacoes", methods=["POST"])
 def gera_recomendacoes():
     
@@ -219,13 +202,13 @@ def gera_recomendacoes():
     try:
         ratings, USER_ID = inserir_novo_usuario(ratings_base, movies, avaliacoes_usuario)  # base com o usuário fictício e o ID dele
     except ValueError as erro:
-        raise SystemExit(f"Avaliações inválidas. {erro}")
+        return jsonify({"erro": f"Avaliações inválidas. {erro}"}), 400
 
     calculos = montar_calculos(movies, ratings, USER_ID)  # histórico e perfil de gêneros usados pelos dois algoritmos
     
     print(SEPARADOR)
     print(f"===== Filmes avaliados pelo usuário {USER_ID} =====")
-    print(formatar_tabela(calculos["historico_usuario"]))
+    print(calculos["historico_usuario"])
 
     print(f"\nPerfil de gêneros do usuário {USER_ID}: {sorted(calculos['perfil_generos_usuario'])}")
     print(f"Perfil de gêneros do usuário {USER_ID} (core, >= {CORE_GENERO_MIN_FRACAO:.0%} dos filmes): {sorted(calculos['perfil_core_usuario'])}")
@@ -242,7 +225,7 @@ def gera_recomendacoes():
     recomendacoes_knn = rodar_knn(movies, ratings, USER_ID, calculos)  # top 5 do KNN
 
     print(f"\n===== Top 5 filmes recomendados para o usuário {USER_ID} (KNN) =====")
-    print(formatar_tabela(recomendacoes_knn[["title", "genres", "nota_estimada", "qtd_vizinhos", "generos_em_comum"]]))
+    print(recomendacoes_knn[["title", "genres", "nota_estimada", "qtd_vizinhos", "generos_em_comum"]])
 
     end = time.time()
     tempos_recomendacao["KNN"] = end - start
@@ -255,7 +238,7 @@ def gera_recomendacoes():
     recomendacoes_svd = rodar_svd(movies, ratings, USER_ID, calculos)  # top 5 do SVD
 
     print(f"\n===== Top 5 filmes recomendados para o usuário {USER_ID} (SVD) =====")
-    print(formatar_tabela(recomendacoes_svd[["title", "genres", "nota_estimada", "generos_em_comum"]]))
+    print(recomendacoes_svd[["title", "genres", "nota_estimada", "generos_em_comum"]])
 
     end = time.time()
     tempos_recomendacao["SVD"] = end - start
@@ -268,7 +251,7 @@ def gera_recomendacoes():
     recomendacoes_rede = rodar_rede_neural(movies, ratings, USER_ID, calculos)  # top 5 da rede neural
 
     print(f"\n===== Top 5 filmes recomendados para o usuário {USER_ID} (Rede Neural) =====")
-    print(formatar_tabela(recomendacoes_rede[["title", "genres", "nota_estimada", "generos_em_comum"]]))
+    print(recomendacoes_rede[["title", "genres", "nota_estimada", "generos_em_comum"]])
 
     end = time.time()
     tempos_recomendacao["Rede Neural"] = end - start
@@ -292,7 +275,7 @@ def gera_recomendacoes():
         resumo = resumo.join(pd.DataFrame(metricas).T)  # acrescenta RMSE, MAE e tempo de avaliação ao resumo
 
         print("===== Resumo da execução =====")
-        print(formatar_tabela(resumo.rename_axis("algoritmo").reset_index()))
+        print(resumo.rename_axis("algoritmo").reset_index())
         print(f"\nRMSE e MAE medidos em {len(teste_df)} avaliações de teste")
 
     resposta = {

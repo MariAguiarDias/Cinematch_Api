@@ -74,10 +74,11 @@ def montar_vetor_usuario(notas_usuario):
     )
 
 # Busca os vizinhos mais parecidos com um usuário, sem ele mesmo e sem os de similaridade nula
-def buscar_vizinhos(knn, vetor_usuario, user_pos=None):
+def buscar_vizinhos(knn, vetor_usuario, user_pos=None, k=K_VIZINHOS):
 
     # Um usuário que já está na matriz aparece como vizinho de si mesmo, por isso é pedido um vizinho a mais
-    n_vizinhos = K_VIZINHOS + (user_pos is not None)  # Quantidade de vizinhos pedida ao modelo
+    n_vizinhos = k + (user_pos is not None)  # Quantidade de vizinhos pedida ao modelo
+    n_vizinhos = min(n_vizinhos, knn.n_samples_fit_)  # Não pede mais vizinhos do que usuários na base
 
     # Pega os vizinhos mais próximos do usuário-alvo, com distâncias e posições do mais próximo ao mais distante
     distancias, indices = knn.kneighbors(vetor_usuario, n_neighbors=n_vizinhos)
@@ -158,54 +159,65 @@ def rodar_knn(movies, ratings, USER_ID, calculos):
     movie_index = _modelo_base["movie_index"]  # IDs reais dos filmes, na ordem das colunas
 
     vetor_usuario = montar_vetor_usuario(ratings[ratings["userId"] == USER_ID])  # notas do usuário-alvo no formato de uma linha da matriz
-    vizinhos, similaridades = buscar_vizinhos(_modelo_base["knn"], vetor_usuario)  # vizinhos úteis e o peso de cada um
 
-    # Agrega as notas dos vizinhos, ponderadas pela similaridade, para todos os filmes que o usuário-alvo ainda não viu
-    scores = {}  # soma de similaridade * nota de cada filme
-    soma_similaridades = {}  # soma das similaridades de quem avaliou cada filme
-    contagem_vizinhos = {}  # Quantos vizinhos avaliaram cada filme (suporte)
+    # Se faltar filme, aumenta o número de vizinhos (20, 40, 80) e, em cada tentativa, baixa o suporte (3, 2, 1)
+    for k in (K_VIZINHOS, K_VIZINHOS * 2, K_VIZINHOS * 4):
 
-    for idx_vizinho, similaridade in zip(vizinhos, similaridades):
+        vizinhos, similaridades = buscar_vizinhos(_modelo_base["knn"], vetor_usuario, k=k)  # vizinhos úteis e o peso de cada um
 
-        # Transforma as notas do vizinho atual de linha da matriz esparsa para um array plano
-        notas_vizinho = matriz_avaliacoes[idx_vizinho].toarray().ravel()  # nota do vizinho para cada filme, com zero onde não avaliou
+        # Agrega as notas dos vizinhos, ponderadas pela similaridade, para todos os filmes que o usuário-alvo ainda não viu
+        scores = {}  # soma de similaridade * nota de cada filme
+        soma_similaridades = {}  # soma das similaridades de quem avaliou cada filme
+        contagem_vizinhos = {}  # Quantos vizinhos avaliaram cada filme (suporte)
 
-        # Pega os índices dos filmes que este vizinho realmente avaliou (valores diferentes de zero)
-        filmes_avaliados_pos = notas_vizinho.nonzero()[0]  # colunas dos filmes avaliados pelo vizinho
+        for idx_vizinho, similaridade in zip(vizinhos, similaridades):
+            
+            # Transforma as notas do vizinho atual de linha da matriz esparsa para um array plano
+            notas_vizinho = matriz_avaliacoes[idx_vizinho].toarray().ravel()  # nota do vizinho para cada filme, com zero onde não avaliou
 
-        # Itera sobre cada filme avaliado pelo vizinho atual
-        for pos_filme in filmes_avaliados_pos:
-            movie_id = movie_index[pos_filme]  # ID real do filme da coluna atual
+            # Pega os índices dos filmes que este vizinho realmente avaliou (valores diferentes de zero)
+            filmes_avaliados_pos = notas_vizinho.nonzero()[0]  # colunas dos filmes avaliados pelo vizinho
 
-            # Descarta filmes que o usuário-alvo já assistiu
-            if movie_id in watched_ids:
-                continue
+            # Itera sobre cada filme avaliado pelo vizinho atual
+            for pos_filme in filmes_avaliados_pos:
+                movie_id = movie_index[pos_filme]  # ID real do filme da coluna atual
 
-            nota = notas_vizinho[pos_filme]  # nota que o vizinho deu ao filme
+                # Descarta filmes que o usuário-alvo já assistiu
+                if movie_id in watched_ids:
+                    continue
 
-            # Acumula a nota ponderada pela similaridade do vizinho (similaridade * nota)
-            scores[movie_id] = scores.get(movie_id, 0) + similaridade * nota
+                nota = notas_vizinho[pos_filme] # nota que o vizinho deu ao filme
 
-            # Acumula a soma das similaridades dos vizinhos que avaliaram este filme (para a divisão da média ponderada)
-            soma_similaridades[movie_id] = soma_similaridades.get(movie_id, 0) + similaridade
+                 # Acumula a nota ponderada pela similaridade do vizinho (similaridade * nota)
+                scores[movie_id] = scores.get(movie_id, 0) + similaridade * nota
 
-            # Incrementa o contador de quantos vizinhos avaliaram este filme específico (usado no filtro de suporte mínimo)
-            contagem_vizinhos[movie_id] = contagem_vizinhos.get(movie_id, 0) + 1
+                # Acumula a soma das similaridades dos vizinhos que avaliaram este filme (para a divisão da média ponderada)
+                soma_similaridades[movie_id] = soma_similaridades.get(movie_id, 0) + similaridade
 
-    # Nota estimada de cada filme candidato
-    pontuacao_final = {
-        # Média ponderada: soma(similaridade * nota) / soma(similaridade)
-        movie_id: scores[movie_id] / soma_similaridades[movie_id]
-        for movie_id in scores
-        # Só considera filmes com suporte mínimo (evita recomendar algo que só 1 vizinho avaliou)
-        if contagem_vizinhos[movie_id] >= SUPORTE_MINIMO
-    }
+                # Incrementa o contador de quantos vizinhos avaliaram este filme específico (usado no filtro de suporte mínimo)
+                contagem_vizinhos[movie_id] = contagem_vizinhos.get(movie_id, 0) + 1
 
-    # Filtra os candidatos pelo perfil de gênero do usuário
-    pontuacao_final = aplicar_filtro_genero(pontuacao_final, calculos)  # Se o candidato tiver o perfil core do usuário, ele é mantido
+        for suporte in range(SUPORTE_MINIMO, 0, -1):
 
-    # Seleciona os top N_RECOMENDACOES filmes recomendados
-    top_ids = sorted(pontuacao_final, key=pontuacao_final.get, reverse=True)[:N_RECOMENDACOES]  # IDs dos filmes com maior nota estimada
+            # Nota estimada de cada filme candidato
+            pontuacao_final = {
+                 # Média ponderada: soma(similaridade * nota) / soma(similaridade)
+                movie_id: scores[movie_id] / soma_similaridades[movie_id]
+                for movie_id in scores
+                # Só considera filmes com suporte mínimo (evita recomendar algo que só 1 vizinho avaliou)
+                if contagem_vizinhos[movie_id] >= suporte
+            }
+            # Filtra os candidatos pelo perfil de gênero do usuário
+            pontuacao_final = aplicar_filtro_genero(pontuacao_final, calculos) # Se o candidato tiver o perfil core do usuário, ele é mantido
+
+             # Seleciona os top N_RECOMENDACOES filmes recomendados
+            top_ids = sorted(pontuacao_final, key=pontuacao_final.get, reverse=True)[:N_RECOMENDACOES] # IDs dos filmes com maior nota estimada
+
+            if len(top_ids) >= N_RECOMENDACOES:
+                break
+
+        if len(top_ids) >= N_RECOMENDACOES:
+            break
 
     # Um perfil core muito restrito pode deixar menos candidatos do que o necessário
     if len(top_ids) < N_RECOMENDACOES:
