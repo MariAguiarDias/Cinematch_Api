@@ -304,7 +304,7 @@ def recebe_avaliacoes():
     quantidade_avaliados = dados.get("quantidade_avaliados", 0)
 
     # Nome do arquivo CSV onde os dados serão salvos
-    arquivo_csv = "avaliacoes_teste.csv"
+    arquivo_csv = "avaliacoes.csv"
 
     # Verifica se o arquivo já existe para decidir se escreve o cabeçalho
     arquivo_existe = os.path.exists(arquivo_csv)
