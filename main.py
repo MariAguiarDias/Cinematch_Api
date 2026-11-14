@@ -15,9 +15,6 @@ from rede_neural import rodar_rede_neural, avaliar_rede_neural, preparar_rede_ne
 
 app = Flask(__name__)
 CORS(app)
-    
-# Os modelos são treinados quando o servidor inicia
-obter_base()
 
 ARQUIVO_FILMES = "movies_small.csv"  # catálogo de filmes usado na execução
 ARQUIVO_AVALIACOES = "ratings_small.csv"  # avaliações usadas na execução
@@ -329,6 +326,9 @@ def recebe_avaliacoes():
     except Exception as e:
         print(f"Erro ao salvar no CSV: {e}")
         return jsonify({"erro": "Falha interna ao salvar os dados."}), 500
+
+# Os modelos são treinados quando o servidor inicia
+obter_base()
 
 if __name__ == "__main__":
 
